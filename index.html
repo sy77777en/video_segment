@@ -31,6 +31,52 @@
             text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
         }
 
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+
+        .pagination button {
+            padding: 10px 15px;
+            background: white;
+            color: #667eea;
+            border: 2px solid white;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-width: 45px;
+        }
+
+        .pagination button:hover:not(:disabled) {
+            background: #667eea;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.3);
+        }
+
+        .pagination button.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination-info {
+            color: white;
+            font-size: 0.95rem;
+            padding: 0 15px;
+        }
+
         .clips-container {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(600px, 1fr));
@@ -198,7 +244,14 @@
         
         <div id="errorContainer"></div>
         <div id="loading" class="loading">Loading videos...</div>
+        
+        <!-- Top Pagination -->
+        <div id="topPagination" class="pagination" style="display: none;"></div>
+        
         <div id="clipsContainer" class="clips-container"></div>
+        
+        <!-- Bottom Pagination -->
+        <div id="bottomPagination" class="pagination" style="display: none;"></div>
     </div>
 
     <script>
@@ -209,6 +262,11 @@
         let youtubePlayers = {};
         let youtubeAPIReady = false;
         let youtubeAPILoaded = false;
+        
+        // Pagination variables
+        let currentPage = 1;
+        const itemsPerPage = 20;
+        let totalPages = 1;
 
         // Load YouTube API
         if (!youtubeAPILoaded) {
@@ -245,11 +303,18 @@
             return match ? match[1] : null;
         }
 
-        // Function to format time (seconds to mm:ss)
+        // Function to format time (seconds to mm:ss.ms format)
         function formatTime(seconds) {
             const mins = Math.floor(seconds / 60);
-            const secs = Math.floor(seconds % 60);
-            return `${mins}:${secs.toString().padStart(2, '0')}`;
+            const secs = seconds % 60;
+            const secsInt = Math.floor(secs);
+            const ms = Math.round((secs - secsInt) * 100);
+            
+            if (ms > 0) {
+                return `${mins}:${secsInt.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+            } else {
+                return `${mins}:${secsInt.toString().padStart(2, '0')}`;
+            }
         }
 
         // Function to display error
@@ -261,16 +326,18 @@
             }, 5000);
         }
 
-        // Setup Vimeo player with looping
+        // Setup Vimeo player - play once and pause
         function setupVimeoPlayer(index, videoId, startTime, endTime) {
             const iframe = document.getElementById(`iframe-${index}`);
+            if (!iframe) return;
+            
             const player = new Vimeo.Player(iframe);
             
             vimeoPlayers[index] = {
                 player: player,
                 startTime: startTime,
                 endTime: endTime,
-                isLooping: false
+                isPausing: false
             };
 
             // Set initial start time
@@ -284,25 +351,30 @@
             player.on('timeupdate', (data) => {
                 const playerData = vimeoPlayers[index];
                 if (playerData && playerData.endTime && data.seconds >= playerData.endTime) {
-                    if (!playerData.isLooping) {
-                        playerData.isLooping = true;
-                        player.setCurrentTime(playerData.startTime).then(() => {
-                            playerData.isLooping = false;
+                    if (!playerData.isPausing) {
+                        playerData.isPausing = true;
+                        player.pause().then(() => {
+                            player.setCurrentTime(playerData.startTime).then(() => {
+                                playerData.isPausing = false;
+                            });
                         }).catch((error) => {
-                            console.error('Vimeo seek error:', error);
-                            playerData.isLooping = false;
+                            console.error('Vimeo pause error:', error);
+                            playerData.isPausing = false;
                         });
                     }
                 }
             });
         }
 
-        // Setup YouTube player with looping
+        // Setup YouTube player - play once and pause
         function setupYoutubePlayer(index, videoId, startTime, endTime) {
             // Wait for API to be ready
             const checkAPIReady = setInterval(() => {
                 if (typeof YT !== 'undefined' && YT.Player) {
                     clearInterval(checkAPIReady);
+                    
+                    const iframeExists = document.getElementById(`iframe-${index}`);
+                    if (!iframeExists) return;
                     
                     // Initialize player data
                     youtubePlayers[index] = {
@@ -310,7 +382,8 @@
                         startTime: startTime,
                         endTime: endTime,
                         monitoring: false,
-                        ready: false
+                        ready: false,
+                        hasPaused: false
                     };
 
                     try {
@@ -350,7 +423,7 @@
             }, 100);
         }
 
-        // Monitor YouTube player time
+        // Monitor YouTube player time - pause at end
         function monitorYouTubeTime(index) {
             const playerData = youtubePlayers[index];
             if (!playerData || playerData.monitoring || !playerData.ready) return;
@@ -368,7 +441,13 @@
                     const currentTime = playerData.player.getCurrentTime();
                     
                     if (playerData.endTime && currentTime >= playerData.endTime) {
-                        playerData.player.seekTo(playerData.startTime, true);
+                        if (!playerData.hasPaused) {
+                            playerData.hasPaused = true;
+                            playerData.player.pauseVideo();
+                            playerData.player.seekTo(playerData.startTime, true);
+                            clearInterval(checkTime);
+                            playerData.monitoring = false;
+                        }
                     }
 
                     // Stop monitoring if player is not playing
@@ -382,7 +461,7 @@
                     clearInterval(checkTime);
                     playerData.monitoring = false;
                 }
-            }, 100);
+            }, 50); // Check every 50ms for better precision
         }
 
         // Function to update a specific video clip
@@ -390,8 +469,9 @@
             const startInput = document.getElementById(`start-${index}`);
             const endInput = document.getElementById(`end-${index}`);
 
-            const newStart = parseInt(startInput.value) || 0;
-            const newEnd = parseInt(endInput.value) || null;
+            // Parse as float to support decimal values
+            const newStart = parseFloat(startInput.value) || 0;
+            const newEnd = parseFloat(endInput.value) || null;
 
             // Validate inputs
             if (newStart < 0) {
@@ -416,7 +496,8 @@
 
         // Function to reload video
         function reloadVideo(index, url, startTime, endTime) {
-            const container = document.querySelector(`#iframe-${index}`).parentElement;
+            const container = document.querySelector(`#iframe-${index}`)?.parentElement;
+            if (!container) return;
             
             // Remove old iframe
             const oldIframe = document.getElementById(`iframe-${index}`);
@@ -485,26 +566,106 @@
             );
         }
 
-        // Function to render clips
-        function renderClips(clips) {
-            const container = document.getElementById('clipsContainer');
-            const loading = document.getElementById('loading');
+        // Function to render pagination controls
+        function renderPagination() {
+            const topPagination = document.getElementById('topPagination');
+            const bottomPagination = document.getElementById('bottomPagination');
             
-            loading.style.display = 'none';
-            container.innerHTML = '';
-
-            if (!Array.isArray(clips) || clips.length === 0) {
-                showError('No valid clips found in JSON file');
+            if (totalPages <= 1) {
+                topPagination.style.display = 'none';
+                bottomPagination.style.display = 'none';
                 return;
             }
+            
+            topPagination.style.display = 'flex';
+            bottomPagination.style.display = 'flex';
+            
+            const paginationHTML = createPaginationHTML();
+            topPagination.innerHTML = paginationHTML;
+            bottomPagination.innerHTML = paginationHTML;
+        }
 
-            // Store original data and initialize current state
-            videosData = clips.map(clip => ({ ...clip }));
-            currentState = clips.map(clip => ({ ...clip }));
+        // Function to create pagination HTML
+        function createPaginationHTML() {
+            let html = '';
+            
+            // Previous button
+            html += `<button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>◀ Prev</button>`;
+            
+            // Page numbers
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, currentPage + 2);
+            
+            if (startPage > 1) {
+                html += `<button onclick="goToPage(1)">1</button>`;
+                if (startPage > 2) {
+                    html += `<span class="pagination-info">...</span>`;
+                }
+            }
+            
+            for (let i = startPage; i <= endPage; i++) {
+                html += `<button onclick="goToPage(${i})" ${i === currentPage ? 'class="active"' : ''}>${i}</button>`;
+            }
+            
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += `<span class="pagination-info">...</span>`;
+                }
+                html += `<button onclick="goToPage(${totalPages})">${totalPages}</button>`;
+            }
+            
+            // Next button
+            html += `<button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next ▶</button>`;
+            
+            // Info text
+            const startItem = (currentPage - 1) * itemsPerPage + 1;
+            const endItem = Math.min(currentPage * itemsPerPage, videosData.length);
+            html += `<span class="pagination-info">${startItem}-${endItem} of ${videosData.length}</span>`;
+            
+            return html;
+        }
 
-            clips.forEach((clip, index) => {
+        // Function to go to a specific page
+        function goToPage(page) {
+            if (page < 1 || page > totalPages || page === currentPage) return;
+            
+            currentPage = page;
+            
+            // Clean up existing players
+            Object.keys(youtubePlayers).forEach(key => {
+                try {
+                    if (youtubePlayers[key].player && typeof youtubePlayers[key].player.destroy === 'function') {
+                        youtubePlayers[key].player.destroy();
+                    }
+                } catch (error) {
+                    console.error('Error destroying player:', error);
+                }
+            });
+            youtubePlayers = {};
+            vimeoPlayers = {};
+            
+            // Render new page
+            renderCurrentPage();
+            renderPagination();
+            
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Function to render current page
+        function renderCurrentPage() {
+            const container = document.getElementById('clipsContainer');
+            container.innerHTML = '';
+            
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, videosData.length);
+            const clipsToShow = videosData.slice(startIndex, endIndex);
+            
+            clipsToShow.forEach((clip, pageIndex) => {
+                const actualIndex = startIndex + pageIndex;
+                
                 if (!clip.url || typeof clip.startTime !== 'number') {
-                    console.warn(`Skipping invalid clip at index ${index}`);
+                    console.warn(`Skipping invalid clip at index ${actualIndex}`);
                     return;
                 }
 
@@ -526,11 +687,11 @@
 
                 clipCard.innerHTML = `
                     <div class="clip-header">
-                        <div class="clip-title">${clip.name || `Clip ${index + 1}`} - ${platform}</div>
+                        <div class="clip-title">${clip.name || `Clip ${actualIndex + 1}`} - ${platform}</div>
                     </div>
                     <div class="video-wrapper">
                         <iframe 
-                            id="iframe-${index}"
+                            id="iframe-${actualIndex}"
                             src="${iframeSrc}" 
                             allow="autoplay; fullscreen; picture-in-picture" 
                             allowfullscreen>
@@ -539,30 +700,31 @@
                     <div class="controls">
                         <div class="time-controls">
                             <div class="time-input-group">
-                                <label for="start-${index}">Start Time (seconds)</label>
+                                <label for="start-${actualIndex}">Start Time (seconds, supports decimals)</label>
                                 <input 
                                     type="number" 
-                                    id="start-${index}" 
+                                    id="start-${actualIndex}" 
                                     value="${clip.startTime}"
                                     min="0"
-                                    step="1">
+                                    step="0.01"
+                                    placeholder="e.g. 10.5">
                             </div>
                             <div class="time-input-group">
-                                <label for="end-${index}">End Time (seconds)</label>
+                                <label for="end-${actualIndex}">End Time (seconds, supports decimals)</label>
                                 <input 
                                     type="number" 
-                                    id="end-${index}" 
+                                    id="end-${actualIndex}" 
                                     value="${clip.endTime || ''}"
                                     min="0"
-                                    step="1"
-                                    placeholder="Optional">
+                                    step="0.01"
+                                    placeholder="e.g. 12.75">
                             </div>
                         </div>
                         <div class="button-group">
-                            <button class="update-btn" onclick="updateClip(${index})">
+                            <button class="update-btn" onclick="updateClip(${actualIndex})">
                                 Update Clip
                             </button>
-                            <button class="reset-btn" onclick="resetClip(${index})">
+                            <button class="reset-btn" onclick="resetClip(${actualIndex})">
                                 Reset
                             </button>
                         </div>
@@ -578,13 +740,37 @@
                 setTimeout(() => {
                     if (isYoutube) {
                         const videoId = getYouTubeVideoId(clip.url);
-                        setupYoutubePlayer(index, videoId, clip.startTime, clip.endTime);
+                        setupYoutubePlayer(actualIndex, videoId, clip.startTime, clip.endTime);
                     } else {
                         const videoId = getVimeoVideoId(clip.url);
-                        setupVimeoPlayer(index, videoId, clip.startTime, clip.endTime);
+                        setupVimeoPlayer(actualIndex, videoId, clip.startTime, clip.endTime);
                     }
                 }, 1500);
             });
+        }
+
+        // Function to render clips
+        function renderClips(clips) {
+            const loading = document.getElementById('loading');
+            
+            loading.style.display = 'none';
+
+            if (!Array.isArray(clips) || clips.length === 0) {
+                showError('No valid clips found in JSON file');
+                return;
+            }
+
+            // Store original data and initialize current state
+            videosData = clips.map(clip => ({ ...clip }));
+            currentState = clips.map(clip => ({ ...clip }));
+            
+            // Calculate total pages
+            totalPages = Math.ceil(videosData.length / itemsPerPage);
+            currentPage = 1;
+            
+            // Render first page and pagination
+            renderCurrentPage();
+            renderPagination();
         }
 
         // Load videos.json from the same directory
