@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Clip Editor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .clips-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(600px, 1fr));
+            gap: 30px;
+        }
+
+        .clip-card {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .clip-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        }
+
+        .clip-header {
+            padding: 15px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .clip-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .video-wrapper {
+            position: relative;
+            padding-bottom: 56.25%;
+            height: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        .video-wrapper iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .controls {
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .time-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .time-input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .time-input-group label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .time-input-group input {
+            padding: 10px;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        .time-input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .update-btn {
+            background: #667eea;
+            color: white;
+        }
+
+        .update-btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .reset-btn {
+            background: #6c757d;
+            color: white;
+        }
+
+        .reset-btn:hover {
+            background: #5a6268;
+        }
+
+        .info-text {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        .error-message {
+            background: #ff4444;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.2rem;
+            margin: 50px 0;
+        }
+
+        @media (max-width: 768px) {
+            .clips-container {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8rem;
+            }
+
+            .time-controls {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 Video Clip Editor</h1>
+        
+        <div id="errorContainer"></div>
+        <div id="loading" class="loading">Loading videos...</div>
+        <div id="clipsContainer" class="clips-container"></div>
+    </div>
+
+    <script>
+        // Store original video data and current state
+        let videosData = [];
+        let currentState = [];
+
+        // Function to extract video ID from YouTube URL
+        function getYouTubeVideoId(url) {
+            const patterns = [
+                /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+                /youtube\.com\/shorts\/([^&\n?#]+)/
+            ];
+            
+            for (const pattern of patterns) {
+                const match = url.match(pattern);
+                if (match) return match[1];
+            }
+            return null;
+        }
+
+        // Function to extract video ID from Vimeo URL
+        function getVimeoVideoId(url) {
+            const match = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+            return match ? match[1] : null;
+        }
+
+        // Function to format time (seconds to mm:ss)
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // Function to create embed URL
+        function createEmbedUrl(url, startTime, endTime) {
+            if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                const videoId = getYouTubeVideoId(url);
+                if (!videoId) return null;
+                
+                let embedUrl = `https://www.youtube.com/embed/${videoId}?start=${startTime}`;
+                if (endTime) {
+                    embedUrl += `&end=${endTime}`;
+                }
+                return embedUrl;
+            } else if (url.includes('vimeo.com')) {
+                const videoId = getVimeoVideoId(url);
+                if (!videoId) return null;
+                
+                return `https://player.vimeo.com/video/${videoId}#t=${startTime}s`;
+            }
+            return null;
+        }
+
+        // Function to display error
+        function showError(message) {
+            const errorContainer = document.getElementById('errorContainer');
+            errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+            setTimeout(() => {
+                errorContainer.innerHTML = '';
+            }, 5000);
+        }
+
+        // Function to update a specific video clip
+        function updateClip(index) {
+            const startInput = document.getElementById(`start-${index}`);
+            const endInput = document.getElementById(`end-${index}`);
+            const iframe = document.getElementById(`iframe-${index}`);
+
+            const newStart = parseInt(startInput.value) || 0;
+            const newEnd = parseInt(endInput.value) || null;
+
+            // Validate inputs
+            if (newStart < 0) {
+                showError('Start time cannot be negative');
+                return;
+            }
+
+            if (newEnd && newEnd <= newStart) {
+                showError('End time must be greater than start time');
+                return;
+            }
+
+            // Update current state
+            currentState[index].startTime = newStart;
+            currentState[index].endTime = newEnd;
+
+            // Create new embed URL
+            const newUrl = createEmbedUrl(
+                currentState[index].url,
+                newStart,
+                newEnd
+            );
+
+            if (newUrl) {
+                iframe.src = newUrl;
+            }
+        }
+
+        // Function to reset a specific video clip
+        function resetClip(index) {
+            const startInput = document.getElementById(`start-${index}`);
+            const endInput = document.getElementById(`end-${index}`);
+            const iframe = document.getElementById(`iframe-${index}`);
+
+            // Reset to original values
+            currentState[index] = { ...videosData[index] };
+            startInput.value = videosData[index].startTime;
+            endInput.value = videosData[index].endTime || '';
+
+            // Create original embed URL
+            const originalUrl = createEmbedUrl(
+                videosData[index].url,
+                videosData[index].startTime,
+                videosData[index].endTime
+            );
+
+            if (originalUrl) {
+                iframe.src = originalUrl;
+            }
+        }
+
+        // Function to render clips
+        function renderClips(clips) {
+            const container = document.getElementById('clipsContainer');
+            const loading = document.getElementById('loading');
+            
+            loading.style.display = 'none';
+            container.innerHTML = '';
+
+            if (!Array.isArray(clips) || clips.length === 0) {
+                showError('No valid clips found in JSON file');
+                return;
+            }
+
+            // Store original data and initialize current state
+            videosData = clips.map(clip => ({ ...clip }));
+            currentState = clips.map(clip => ({ ...clip }));
+
+            clips.forEach((clip, index) => {
+                if (!clip.url || typeof clip.startTime !== 'number') {
+                    console.warn(`Skipping invalid clip at index ${index}`);
+                    return;
+                }
+
+                const embedUrl = createEmbedUrl(clip.url, clip.startTime, clip.endTime);
+                
+                if (!embedUrl) {
+                    console.warn(`Could not create embed URL for clip at index ${index}`);
+                    return;
+                }
+
+                const duration = clip.endTime ? clip.endTime - clip.startTime : null;
+                const platform = clip.url.includes('youtube') || clip.url.includes('youtu.be') ? 'YouTube' : 'Vimeo';
+
+                const clipCard = document.createElement('div');
+                clipCard.className = 'clip-card';
+                clipCard.innerHTML = `
+                    <div class="clip-header">
+                        <div class="clip-title">Clip ${index + 1} - ${platform}</div>
+                    </div>
+                    <div class="video-wrapper">
+                        <iframe 
+                            id="iframe-${index}"
+                            src="${embedUrl}" 
+                            allow="autoplay; fullscreen; picture-in-picture" 
+                            allowfullscreen>
+                        </iframe>
+                    </div>
+                    <div class="controls">
+                        <div class="time-controls">
+                            <div class="time-input-group">
+                                <label for="start-${index}">Start Time (seconds)</label>
+                                <input 
+                                    type="number" 
+                                    id="start-${index}" 
+                                    value="${clip.startTime}"
+                                    min="0"
+                                    step="1">
+                            </div>
+                            <div class="time-input-group">
+                                <label for="end-${index}">End Time (seconds)</label>
+                                <input 
+                                    type="number" 
+                                    id="end-${index}" 
+                                    value="${clip.endTime || ''}"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Optional">
+                            </div>
+                        </div>
+                        <div class="button-group">
+                            <button class="update-btn" onclick="updateClip(${index})">
+                                Update Clip
+                            </button>
+                            <button class="reset-btn" onclick="resetClip(${index})">
+                                Reset
+                            </button>
+                        </div>
+                        <div class="info-text">
+                            Current duration: ${duration ? formatTime(duration) : 'Until end'}
+                        </div>
+                    </div>
+                `;
+                
+                container.appendChild(clipCard);
+            });
+        }
+
+        // Load videos.json from the same directory
+        async function loadVideos() {
+            try {
+                const response = await fetch('videos.json');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                renderClips(data);
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                showError('Error loading videos.json: ' + error.message);
+                console.error('Error:', error);
+            }
+        }
+
+        // Load videos when page loads
+        window.addEventListener('DOMContentLoaded', loadVideos);
+    </script>
+</body>
+</html>
