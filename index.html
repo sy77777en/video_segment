@@ -189,6 +189,10 @@
             }
         }
     </style>
+    <!-- Load Vimeo Player API -->
+    <script src="https://player.vimeo.com/api/player.js"></script>
+    <!-- Load YouTube IFrame API -->
+    <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
     <div class="container">
@@ -203,6 +207,14 @@
         // Store original video data and current state
         let videosData = [];
         let currentState = [];
+        let vimeoPlayers = {};
+        let youtubePlayers = {};
+        let youtubeAPIReady = false;
+
+        // YouTube API ready callback
+        function onYouTubeIframeAPIReady() {
+            youtubeAPIReady = true;
+        }
 
         // Function to extract video ID from YouTube URL
         function getYouTubeVideoId(url) {
@@ -231,26 +243,6 @@
             return `${mins}:${secs.toString().padStart(2, '0')}`;
         }
 
-        // Function to create embed URL
-        function createEmbedUrl(url, startTime, endTime) {
-            if (url.includes('youtube.com') || url.includes('youtu.be')) {
-                const videoId = getYouTubeVideoId(url);
-                if (!videoId) return null;
-                
-                let embedUrl = `https://www.youtube.com/embed/${videoId}?start=${startTime}`;
-                if (endTime) {
-                    embedUrl += `&end=${endTime}`;
-                }
-                return embedUrl;
-            } else if (url.includes('vimeo.com')) {
-                const videoId = getVimeoVideoId(url);
-                if (!videoId) return null;
-                
-                return `https://player.vimeo.com/video/${videoId}#t=${startTime}s`;
-            }
-            return null;
-        }
-
         // Function to display error
         function showError(message) {
             const errorContainer = document.getElementById('errorContainer');
@@ -260,11 +252,107 @@
             }, 5000);
         }
 
+        // Setup Vimeo player with looping
+        function setupVimeoPlayer(index, videoId, startTime, endTime) {
+            const iframe = document.getElementById(`iframe-${index}`);
+            const player = new Vimeo.Player(iframe);
+            
+            vimeoPlayers[index] = {
+                player: player,
+                startTime: startTime,
+                endTime: endTime,
+                isLooping: false
+            };
+
+            // Set initial start time
+            player.setCurrentTime(startTime).then(() => {
+                player.play();
+            });
+
+            // Monitor time updates
+            player.on('timeupdate', (data) => {
+                const playerData = vimeoPlayers[index];
+                if (playerData.endTime && data.seconds >= playerData.endTime) {
+                    if (!playerData.isLooping) {
+                        playerData.isLooping = true;
+                        player.setCurrentTime(playerData.startTime).then(() => {
+                            playerData.isLooping = false;
+                        });
+                    }
+                }
+            });
+        }
+
+        // Setup YouTube player with looping
+        function setupYoutubePlayer(index, videoId, startTime, endTime) {
+            // Wait for API to be ready
+            const checkAPIReady = setInterval(() => {
+                if (typeof YT !== 'undefined' && YT.Player) {
+                    clearInterval(checkAPIReady);
+                    
+                    const player = new YT.Player(`iframe-${index}`, {
+                        videoId: videoId,
+                        playerVars: {
+                            start: startTime,
+                            autoplay: 1,
+                            controls: 1
+                        },
+                        events: {
+                            onReady: (event) => {
+                                event.target.playVideo();
+                            },
+                            onStateChange: (event) => {
+                                // Monitor playback
+                                if (event.data === YT.PlayerState.PLAYING) {
+                                    monitorYouTubeTime(index);
+                                }
+                            }
+                        }
+                    });
+
+                    youtubePlayers[index] = {
+                        player: player,
+                        startTime: startTime,
+                        endTime: endTime,
+                        monitoring: false
+                    };
+                }
+            }, 100);
+        }
+
+        // Monitor YouTube player time
+        function monitorYouTubeTime(index) {
+            const playerData = youtubePlayers[index];
+            if (!playerData || playerData.monitoring) return;
+            
+            playerData.monitoring = true;
+            
+            const checkTime = setInterval(() => {
+                if (!playerData.player || !playerData.player.getCurrentTime) {
+                    clearInterval(checkTime);
+                    playerData.monitoring = false;
+                    return;
+                }
+
+                const currentTime = playerData.player.getCurrentTime();
+                
+                if (playerData.endTime && currentTime >= playerData.endTime) {
+                    playerData.player.seekTo(playerData.startTime);
+                }
+
+                // Stop monitoring if player is not playing
+                const state = playerData.player.getPlayerState();
+                if (state !== YT.PlayerState.PLAYING) {
+                    clearInterval(checkTime);
+                    playerData.monitoring = false;
+                }
+            }, 100);
+        }
+
         // Function to update a specific video clip
         function updateClip(index) {
             const startInput = document.getElementById(`start-${index}`);
             const endInput = document.getElementById(`end-${index}`);
-            const iframe = document.getElementById(`iframe-${index}`);
 
             const newStart = parseInt(startInput.value) || 0;
             const newEnd = parseInt(endInput.value) || null;
@@ -284,15 +372,44 @@
             currentState[index].startTime = newStart;
             currentState[index].endTime = newEnd;
 
-            // Create new embed URL
-            const newUrl = createEmbedUrl(
-                currentState[index].url,
-                newStart,
-                newEnd
-            );
+            const url = currentState[index].url;
 
-            if (newUrl) {
-                iframe.src = newUrl;
+            // Reload the iframe with new times
+            reloadVideo(index, url, newStart, newEnd);
+        }
+
+        // Function to reload video
+        function reloadVideo(index, url, startTime, endTime) {
+            const container = document.querySelector(`#iframe-${index}`).parentElement;
+            
+            // Remove old iframe
+            const oldIframe = document.getElementById(`iframe-${index}`);
+            oldIframe.remove();
+
+            // Create new iframe
+            const newIframe = document.createElement('iframe');
+            newIframe.id = `iframe-${index}`;
+            newIframe.allow = "autoplay; fullscreen; picture-in-picture";
+            newIframe.allowFullscreen = true;
+
+            if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                const videoId = getYouTubeVideoId(url);
+                newIframe.src = `https://www.youtube.com/embed/${videoId}?enablejsapi=1`;
+                container.appendChild(newIframe);
+                
+                // Setup YouTube player
+                setTimeout(() => {
+                    setupYoutubePlayer(index, videoId, startTime, endTime);
+                }, 500);
+            } else if (url.includes('vimeo.com')) {
+                const videoId = getVimeoVideoId(url);
+                newIframe.src = `https://player.vimeo.com/video/${videoId}`;
+                container.appendChild(newIframe);
+                
+                // Setup Vimeo player
+                setTimeout(() => {
+                    setupVimeoPlayer(index, videoId, startTime, endTime);
+                }, 500);
             }
         }
 
@@ -300,23 +417,19 @@
         function resetClip(index) {
             const startInput = document.getElementById(`start-${index}`);
             const endInput = document.getElementById(`end-${index}`);
-            const iframe = document.getElementById(`iframe-${index}`);
 
             // Reset to original values
             currentState[index] = { ...videosData[index] };
             startInput.value = videosData[index].startTime;
             endInput.value = videosData[index].endTime || '';
 
-            // Create original embed URL
-            const originalUrl = createEmbedUrl(
+            // Reload video
+            reloadVideo(
+                index,
                 videosData[index].url,
                 videosData[index].startTime,
                 videosData[index].endTime
             );
-
-            if (originalUrl) {
-                iframe.src = originalUrl;
-            }
         }
 
         // Function to render clips
@@ -342,18 +455,22 @@
                     return;
                 }
 
-                const embedUrl = createEmbedUrl(clip.url, clip.startTime, clip.endTime);
-                
-                if (!embedUrl) {
-                    console.warn(`Could not create embed URL for clip at index ${index}`);
-                    return;
-                }
-
                 const duration = clip.endTime ? clip.endTime - clip.startTime : null;
-                const platform = clip.url.includes('youtube') || clip.url.includes('youtu.be') ? 'YouTube' : 'Vimeo';
+                const isYoutube = clip.url.includes('youtube') || clip.url.includes('youtu.be');
+                const platform = isYoutube ? 'YouTube' : 'Vimeo';
 
                 const clipCard = document.createElement('div');
                 clipCard.className = 'clip-card';
+                
+                let iframeSrc = '';
+                if (isYoutube) {
+                    const videoId = getYouTubeVideoId(clip.url);
+                    iframeSrc = `https://www.youtube.com/embed/${videoId}?enablejsapi=1`;
+                } else {
+                    const videoId = getVimeoVideoId(clip.url);
+                    iframeSrc = `https://player.vimeo.com/video/${videoId}`;
+                }
+
                 clipCard.innerHTML = `
                     <div class="clip-header">
                         <div class="clip-title">Clip ${index + 1} - ${platform}</div>
@@ -361,7 +478,7 @@
                     <div class="video-wrapper">
                         <iframe 
                             id="iframe-${index}"
-                            src="${embedUrl}" 
+                            src="${iframeSrc}" 
                             allow="autoplay; fullscreen; picture-in-picture" 
                             allowfullscreen>
                         </iframe>
@@ -403,6 +520,17 @@
                 `;
                 
                 container.appendChild(clipCard);
+
+                // Setup player after iframe is loaded
+                setTimeout(() => {
+                    if (isYoutube) {
+                        const videoId = getYouTubeVideoId(clip.url);
+                        setupYoutubePlayer(index, videoId, clip.startTime, clip.endTime);
+                    } else {
+                        const videoId = getVimeoVideoId(clip.url);
+                        setupVimeoPlayer(index, videoId, clip.startTime, clip.endTime);
+                    }
+                }, 1000);
             });
         }
 
